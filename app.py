@@ -1,88 +1,70 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 import streamlit as st
 import os
-
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
-
 from tools import calculator, word_counter
 
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Gemini AI Agent", page_icon="🤖")
 
-# Load API Key
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+def get_api_key():
+    """Fetch API key from Secrets (Cloud) or .env (Local)"""
+    if "GOOGLE_API_KEY" in st.secrets:
+        return st.secrets["GOOGLE_API_KEY"]
+    return os.getenv("GOOGLE_API_KEY")
 
+@st.cache_resource
+def setup_agent():
+    """Initializes the Agent once and caches it for performance"""
+    api_key = get_api_key()
+    
+    if not api_key:
+        st.error("Missing GOOGLE_API_KEY. Please set it in Streamlit Secrets or .env file.")
+        st.stop()
 
-# Gemini model
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=GOOGLE_API_KEY,
-    temperature=0
-)
+    # Model
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", # Note: 2.5 is not a standard version yet, 1.5 is the current stable flash
+        google_api_key=api_key,
+        temperature=0
+    )
 
+    # Tools
+    tools = [calculator, word_counter]
 
-# Tools
-tools = [calculator, word_counter]
-
-
-# Prompt
-# prompt = ChatPromptTemplate.from_messages(
-#     [
-#         ("system", "You are a helpful AI assistant that can use tools."),
-#         ("human", "{input}"),
-#         ("placeholder", "{agent_scratchpad}")
-#     ]
-# )
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system",
-         "You are a helpful AI assistant.\n"
-         "You can answer questions using your own knowledge.\n"
-         "Use tools only when necessary.\n"
-         "If a question requires calculation, use the calculator tool.\n"
-         "If a question asks for word count, use the word_counter tool."
-        ),
-        
+    # Prompt Template
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", (
+            "You are a helpful AI assistant. Answer using your own knowledge "
+            "and use tools only when necessary. For math, use the 'calculator' tool. "
+            "For counting words, use the 'word_counter' tool."
+        )),
         ("human", "{input}"),
-        
         ("placeholder", "{agent_scratchpad}")
-    ]
-)
+    ])
 
-# Create agent
-agent = create_tool_calling_agent(
-    llm,
-    tools,
-    prompt
-)
+    # Build Agent
+    agent = create_tool_calling_agent(llm, tools, prompt)
+    return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-
-# Agent executor
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=True
-)
-
-
-def my_output(query):
-    result = agent_executor.invoke({"input": query})
-    return result["output"]
-
-
-# Streamlit UI
-st.set_page_config(page_title="AI Agent")
-
+# --- UI LOGIC ---
 st.title("🤖 Gemini Agent Bot")
+st.markdown("Ask me to calculate something or count words in a text!")
 
-query = st.text_input("Ask something")
+# Initialize the agent
+executor = setup_agent()
 
-if st.button("Ask Agent"):
+query = st.text_input("How can I help you today?", placeholder="e.g., What is 55 * 12?")
 
-    response = my_output(query)
-
-    st.subheader("Response")
-    st.write(response)
+if st.button("Run Agent", type="primary"):
+    if query:
+        with st.spinner("Thinking..."):
+            try:
+                response = executor.invoke({"input": query})
+                st.subheader("Response")
+                st.write(response["output"])
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
+    else:
+        st.warning("Please enter a query first.")
